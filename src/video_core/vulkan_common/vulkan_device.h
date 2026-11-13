@@ -410,10 +410,10 @@ public:
         return GetDriverID() != VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS;
     }
 
-    /// Where it can't (IGCIT #1614), reads of a pipeline cache wait for the builds into it, and
-    /// hold back new ones, so that the cache can be saved during play as well.
-    /// EDEN_NX2_CACHE_SAFE=0 turns this off: such a driver's cache is then read only when nothing
-    /// is expected to build, as before.
+    /// Where it can't (IGCIT #1614), with EDEN_NX2_CACHE_SAFE=1, reads of a pipeline cache wait for
+    /// the builds into it, and hold back new ones, so that the cache can be saved during play as
+    /// well. Off by default until a v21-dev boot that hung with it on is explained: such a
+    /// driver's cache is then read only when nothing is expected to build, as before.
     bool SerializesPipelineCacheReads() const {
         static const bool disabled = [] {
             const char* value = std::getenv("EDEN_NX2_CACHE_SAFE");

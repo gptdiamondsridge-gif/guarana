@@ -235,9 +235,11 @@ private:
     /// Writes the driver pipeline cache to its file and returns the size of its data. Where its
     /// reads are serialized against builds (Device::SerializesPipelineCacheReads), a cache that
     /// holds what the file does is not written again: nothing was built since the file was read
-    /// or written or, with `skip_same_size`, its size is the one the file holds (the exit's save
-    /// doesn't take that guess). There, with `max_lock_wait`, each of a few tries a second apart
-    /// waits that long for the running builds, and the save is dropped when none gets the lock.
+    /// or written or, with `skip_same_size` and EDEN_NX2_CACHE_SIZE_SKIP=1, its size is the one the
+    /// file holds (the exit's save doesn't take that guess). Without the variable every size
+    /// query is followed by the data read. There, with `max_lock_wait`, each of a few tries a
+    /// second apart waits that long for the running builds, and the save is dropped when none
+    /// gets the lock.
     size_t SerializeVulkanPipelineCache(
         const std::filesystem::path& filename, const vk::PipelineCache& pipeline_cache,
         u32 cache_version, bool skip_same_size = false,

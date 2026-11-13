@@ -109,6 +109,31 @@ constexpr size_t VULKAN_CACHE_SERIALIZED_FLUSH_SECONDS = 60;
 /// How long each of its tries waits for the running builds, which hold the new ones back meanwhile
 constexpr std::chrono::milliseconds VULKAN_CACHE_SERIALIZED_FLUSH_LOCK_WAIT{250};
 constexpr int VULKAN_CACHE_SERIALIZED_FLUSH_LOCK_TRIES = 4;
+
+/// EDEN_NX2_CACHE_SIZE_SKIP=1, with EDEN_NX2_CACHE_SAFE=1: the boot's, the precache's and in-play
+/// saves skip a cache of the size its file holds, which takes vkGetPipelineCacheData size queries
+/// with no data read after them, at load and at those saves. Off by default: the v21-dev boot that
+/// hung on Intel's 32.0.101.9175 queried the size so twice and never read the data, where every
+/// boot that presented had read it first.
+bool SkipsSameSizeSaves() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_CACHE_SIZE_SKIP");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
+/// EDEN_NX2_CACHE_PREBUILD_FIRST=1, with EDEN_NX2_CACHE_SAFE=1: the background prebuild starts
+/// before the boot's save again, as without the lock; the save then waits for the builds running
+/// then. Tells the prebuild order apart from the lock while that hang is open.
+bool PrebuildsBeforeSave() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_CACHE_PREBUILD_FIRST");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
 constexpr auto& VULKAN_CACHE_MAGIC_NUMBER = VideoCommon::VulkanDriverPipelineCacheMagic;
 
 template <typename Container>
@@ -1465,8 +1490,13 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         vulkan_pipeline_cache =
             LoadVulkanPipelineCache(vulkan_pipeline_cache_filename, CACHE_VERSION);
         if (device.SerializesPipelineCacheReads()) {
-            LOG_INFO(Render_Vulkan, "Driver pipeline cache: reads wait for the builds into it, "
-                                    "saved during play too (EDEN_NX2_CACHE_SAFE=0 turns this off)");
+            LOG_INFO(Render_Vulkan,
+                     "Driver pipeline cache: reads wait for the builds into it, saved during play "
+                     "too (EDEN_NX2_CACHE_SAFE=1), same-size saves {}, background prebuild {}",
+                     SkipsSameSizeSaves() ? "skipped (EDEN_NX2_CACHE_SIZE_SKIP=1)" : "written",
+                     PrebuildsBeforeSave()
+                         ? "before the boot's save (EDEN_NX2_CACHE_PREBUILD_FIRST=1)"
+                         : "after the boot's save");
         }
     }
     if (boot_lock.Held() && !Common::FS::NewFile(boot_marker)) {
@@ -1987,7 +2017,8 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     // wait for the builds into it (Device::SerializesPipelineCacheReads), after the save below
     // too, which would otherwise wait for the background builds then running (Intel's Windows
     // driver crashed reading the cache during them, IGCIT #1614).
-    const bool prebuild_after_save = precache || device.SerializesPipelineCacheReads();
+    const bool prebuild_after_save =
+        precache || (device.SerializesPipelineCacheReads() && !PrebuildsBeforeSave());
     size_t deferred_pipelines = 0;
     const auto start_prebuild = [&] {
         for (PrebuildRecord& record : prebuild) {
@@ -3737,7 +3768,7 @@ size_t PipelineCache::SerializeVulkanPipelineCache(
         if (pipeline_cache) {
             result = pipeline_cache.Read(&cache_size, nullptr);
         }
-        if (result == VK_SUCCESS && serialized && skip_same_size &&
+        if (result == VK_SUCCESS && serialized && skip_same_size && SkipsSameSizeSaves() &&
             cache_size == saved_cache_size) {
             // What was built since was in it already, presumably. The builds stay counted, so
             // that the exit's save writes the cache all the same.
@@ -3901,7 +3932,7 @@ vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::
             // Where saves compare sizes, the size the driver gives the cache it made of the file:
             // it may hold the same pipelines in other bytes than the file.
             size_t held_size = cache_size;
-            if (device.SerializesPipelineCacheReads()) {
+            if (device.SerializesPipelineCacheReads() && SkipsSameSizeSaves()) {
                 const auto read_lock = device.LockPipelineCacheForRead();
                 if (cache.Read(&held_size, nullptr) != VK_SUCCESS) {
                     held_size = cache_size;
