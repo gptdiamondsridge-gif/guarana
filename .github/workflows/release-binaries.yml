@@ -227,38 +227,6 @@ jobs:
         # scripts/build-windows.ps1 and scripts/build-linux.sh build them; remove it from a row to
         # build for any x86-64 CPU.
         include:
-          - platform: linux-x86_64
-            runner: ubuntu-24.04
-            march: x86-64-v3
-          # The Linux -pgo builds are the same programs compiled by clang against the repo's
-          # eglantine.profdata. Eden's profile (Eden-CI/PGO) comes from Switch 1 games: with it Mario
-          # Kart World ran at about half the speed of the normal build, with eglantine.profdata at
-          # about the same speed. Both Windows builds are clang-cl with ThinLTO; windows-x86_64-pgo
-          # adds lichii-windows.profdata, an MSVC-ABI profile trained on Ocarina of Time (see
-          # docs/CI.md). MSVC still builds for development.
-          - platform: linux-x86_64-pgo
-            runner: ubuntu-24.04
-            pgo: true
-            march: x86-64-v3
-          - platform: windows-x86_64
-            runner: windows-2022
-            march: x86-64-v3
-          - platform: windows-x86_64-pgo
-            runner: windows-2022
-            pgo: true
-            profile: lichii-windows.profdata
-            march: x86-64-v3
-          - platform: linux-aarch64
-            runner: ubuntu-24.04-arm
-          - platform: linux-aarch64-pgo
-            runner: ubuntu-24.04-arm
-            pgo: true
-          - platform: macos-arm64
-            runner: macos-15
-          # Windows on ARM (Snapdragon X laptops): clang-cl for ARM64 on GitHub's Windows ARM64
-          # runner, ThinLTO, dynarmic's ARM64 backend. Qt is Eden-CI's static bundle
-          # (LICHII_USE_BUNDLED_QT), which CMakeLists.txt links with the static runtime on ARM64. No PGO:
-          # the profile is x64's.
           - platform: windows-arm64
             runner: windows-11-arm
 
@@ -583,7 +551,7 @@ jobs:
         shell: bash
         run: |
           if command -v ccache > /dev/null; then ccache --zero-stats; else sccache --zero-stats; fi
-          cmake --build build/release --target lichii lichii-cmd --parallel
+          cmake --build build/release --target lichii lichii-cmd --parallel -- -k 0
           if command -v ccache > /dev/null; then ccache --show-stats; else sccache --show-stats; fi
 
       - name: Stop sccache on Windows
