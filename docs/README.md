@@ -34,6 +34,7 @@ those names; where a page and the project README disagree, the README and [AGENT
 | [FEEDBACK.md](FEEDBACK.md) | How a player's report becomes a measured fix in a release |
 | [Build.md](Build.md) | General build instructions |
 | [Deps.md](Deps.md) | Dependencies |
+| [dependencies.md](dependencies.md) | Every pinned third-party dependency, its newest release, upstream's pin and the upgrade plan |
 | [CrossCompile.md](CrossCompile.md) | Cross compiling |
 | [build/Android.md](build/Android.md) | Android build notes |
 | [build/OlderCommits.md](build/OlderCommits.md) | Building older commits |
