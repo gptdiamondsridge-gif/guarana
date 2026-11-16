@@ -216,6 +216,10 @@ jobs:
       # checker only treat build-N as a published build, and the checker asks zortos293/Lichii.
       BUILD_TAG: ${{ needs.prepare.outputs.build_tag }}
       NIGHTLY_BUILD: ${{ needs.prepare.outputs.channel == 'nightly' && 'ON' || 'OFF' }}
+      # Caches are saved by tags, the nightly and runs on main. A run dispatched on another branch
+      # builds and uploads but saves none: its caches could serve only that branch, and the
+      # repository's 10 GB would evict main's to hold them.
+      SAVE_CACHES: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' || contains(github.ref, '/tags/') }}
     strategy:
       fail-fast: false
       matrix:
@@ -251,6 +255,11 @@ jobs:
             pgo: true
           - platform: macos-arm64
             runner: macos-15
+          # Windows on ARM (Snapdragon X laptops): clang-cl for ARM64 on GitHub's Windows ARM64
+          # runner, ThinLTO, dynarmic's ARM64 backend. Qt is Eden-CI's static bundle
+          # (LICHII_USE_BUNDLED_QT), as in Eden's own ARM64 builds. No PGO: the profile is x64's.
+          - platform: windows-arm64
+            runner: windows-11-arm
 
     steps:
       - name: Check out source
@@ -367,16 +376,19 @@ jobs:
       - name: Set up MSVC
         if: startsWith(matrix.platform, 'windows')
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.platform == 'windows-arm64' && 'arm64' || 'x64' }}
 
       # clang-cl compiles against the MSVC headers, libraries and SDK that the previous step put
       # on PATH; only the compiler, linker and archiver come from this LLVM.
       - name: Install LLVM on Windows
         if: startsWith(matrix.platform, 'windows')
         shell: pwsh
-        run: ./tools/windows/install-llvm.ps1
+        run: ./tools/windows/${{ matrix.platform == 'windows-arm64' && 'install-llvm-woa64.ps1' || 'install-llvm.ps1' }}
 
+      # Windows ARM64 takes Qt from Eden-CI's bundle when it configures (Configure Windows).
       - name: Install Qt on Windows
-        if: startsWith(matrix.platform, 'windows')
+        if: startsWith(matrix.platform, 'windows') && matrix.platform != 'windows-arm64'
         uses: jurplel/install-qt-action@v4
         with:
           version: "6.8.3"
@@ -393,8 +405,16 @@ jobs:
         if: startsWith(matrix.platform, 'windows')
         shell: pwsh
         run: |
+          $arch = if ('${{ matrix.platform }}' -eq 'windows-arm64') { 'aarch64' } else { 'x86_64' }
+          $sha256 = @{
+            'x86_64' = '28be8c61f6b2c89b9eb2869f6af7f78e6f992e78a8abae0ce855fcc129cbeac1'
+            'aarch64' = '66d20f1ea5e29f4f309136323635b864e1d8f0a8b587abbc22271bc22d439a5a'
+          }[$arch]
           $zip = Join-Path $env:RUNNER_TEMP 'sccache.zip'
-          Invoke-WebRequest -OutFile $zip https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.zip
+          Invoke-WebRequest -OutFile $zip "https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-$arch-pc-windows-msvc.zip"
+          if ((Get-FileHash -Algorithm SHA256 $zip).Hash -ne $sha256) {
+            throw 'sccache checksum mismatch'
+          }
           Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'sccache')
           $bin = (Get-ChildItem -Recurse -Filter sccache.exe (Join-Path $env:RUNNER_TEMP 'sccache')).DirectoryName
           $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
@@ -488,6 +508,10 @@ jobs:
           # /Z7 keeps debug info in the objects (sccache caches it); the linker writes guarana.pdb,
           # published as a separate symbols archive so crash dumps from users can be symbolized.
           flags="-DWIN32 -D_WINDOWS -DNOMINMAX -flto=thin /Z7"
+          # Windows ARM64 links Eden-CI's static Qt bundle (CMakeLists.txt then takes the static C
+          # runtime); the x64 builds use the Qt that install-qt-action put on PATH.
+          bundled_qt=OFF
+          if [ '${{ matrix.platform }}' = windows-arm64 ]; then bundled_qt=ON; fi
           if [ -n '${{ matrix.march }}' ]; then flags+=" -march=${{ matrix.march }}"; fi
           if [ -n '${{ matrix.profile }}' ]; then
             flags+=" -fprofile-use=$(cygpath -m "$PWD/${{ matrix.profile }}")"
@@ -501,7 +525,7 @@ jobs:
             -DLICHII_CMD=ON \
             -DLICHII_ROOM=OFF \
             -DLICHII_ROOM_STANDALONE=OFF \
-            -DLICHII_USE_BUNDLED_QT=OFF \
+            "-DLICHII_USE_BUNDLED_QT=$bundled_qt" \
             -DENABLE_QT_TRANSLATION=ON \
             -DLICHII_USE_BUNDLED_SDL3=ON \
             -DENABLE_UPDATE_CHECKER=OFF \
@@ -547,7 +571,7 @@ jobs:
             -DUSE_CCACHE=ON
 
       - name: Save CPM downloads
-        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        if: steps.cpm-cache.outputs.cache-hit != 'true' && env.SAVE_CACHES == 'true'
         uses: actions/cache/save@v6
         with:
           path: .cache/cpm
@@ -567,7 +591,7 @@ jobs:
         run: sccache --stop-server
 
       - name: Save compiler objects
-        if: always() && steps.compiler-cache.outcome == 'success'
+        if: always() && steps.compiler-cache.outcome == 'success' && env.SAVE_CACHES == 'true'
         uses: actions/cache/save@v6
         with:
           path: |
@@ -593,7 +617,7 @@ jobs:
         run: bash tools/fsr4-vk/build.sh "$RUNNER_TEMP/fsr4-vk-work" "$RUNNER_TEMP/fsr4-vk"
 
       - name: Save fsr4-vk
-        if: startsWith(matrix.platform, 'linux-x86_64') && steps.fsr4-vk.outputs.cache-hit != 'true'
+        if: startsWith(matrix.platform, 'linux-x86_64') && steps.fsr4-vk.outputs.cache-hit != 'true' && env.SAVE_CACHES == 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/fsr4-vk
@@ -702,7 +726,10 @@ jobs:
               throw "build/release/bin/$exe was not produced"
             }
           }
-          windeployqt --release --no-translations "build/release/bin/$gui"
+          # Windows ARM64 links Qt statically (Configure Windows): there are no Qt DLLs to deploy.
+          if ('${{ matrix.platform }}' -ne 'windows-arm64') {
+            windeployqt --release --no-translations "build/release/bin/$gui"
+          }
           New-Item -ItemType Directory -Force build/release/symbols | Out-Null
           Get-ChildItem build/release/bin -Filter *.pdb | Move-Item -Destination build/release/symbols
 
@@ -902,7 +929,7 @@ jobs:
     name: Publish release
     needs: [prepare, build]
     # Publishes what built: one platform failing (say a Linux toolchain break) does not hold back the
-    # rest. A release without a Windows binary is refused below.
+    # rest. A release without a Windows x86_64 binary is refused below.
     if: ${{ !cancelled() && needs.prepare.outputs.publish == 'true' && needs.build.result != 'skipped' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -929,8 +956,9 @@ jobs:
       - name: Require a Windows binary
         shell: bash
         run: |
-          if ! compgen -G "artifacts/guarana-windows-*" > /dev/null; then
-            echo "::error::No Windows binary was built; not publishing"
+          # x86_64 only: a Windows ARM64 build alone must not stand in for the binary most players run.
+          if ! compgen -G "artifacts/guarana-windows-x86_64*" > /dev/null; then
+            echo "::error::No Windows x86_64 binary was built; not publishing"
             exit 1
           fi
           echo "Built platforms:"; ls artifacts
@@ -1013,7 +1041,12 @@ jobs:
             echo "| Linux x86_64 | $(linux linux-x86_64) | $(linux linux-x86_64-pgo) |"
             echo "| Linux aarch64 | $(linux linux-aarch64) | $(linux linux-aarch64-pgo) |"
             echo "| macOS arm64 | $(pair zip "$(asset macos-arm64).zip" dmg "$(asset macos-arm64).dmg") | |"
+            echo "| Windows ARM64 (Snapdragon X) | $(link zip "$(asset windows-arm64).zip") | |"
             echo
+            if [ -e "dist/$(asset windows-arm64).zip" ]; then
+              echo "> **Windows on ARM** (Snapdragon X laptops): \`$(asset windows-arm64).zip\` is a native ARM64 build without PGO. Nobody on the project has booted it on a device yet: please tell us how it runs with a [device report](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/issues/new?template=device-report.yml)."
+              echo
+            fi
             cat <<'EOF'
           - **Windows**: extract the whole zip into a folder you can write to and run `@WIN_GUI@` (`@WIN_CLI@` from a terminal). Both are clang-cl ThinLTO builds; the PGO zip adds a profile trained on Ocarina of Time, so other games gain less.
           - **Linux**: make the AppImage executable (`chmod +x`) and run it. The tar.gz holds the same files for systems without FUSE: extract it and run `guarana/guarana`. Both need glibc 2.39 or newer. The PGO builds use clang with Eglantine's profile.
