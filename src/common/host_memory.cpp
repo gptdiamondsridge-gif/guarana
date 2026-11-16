@@ -1239,11 +1239,13 @@ u64 HostMemory::MappedBytes() noexcept {
     return g_mapped_bytes.load(std::memory_order_relaxed);
 }
 
-std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
+std::pair<size_t, size_t> HostMemory::TrimZeroPages(std::stop_token stop) const {
 #ifdef _WIN32
-    if (backing_base == nullptr) {
+    if (backing_base == nullptr || stop.stop_requested()) {
         return {0, 0};
     }
+    // Checked every few thousand pages: a pass reads every resident page of guest memory.
+    constexpr size_t StopCheckPages = 4096;
     std::vector<ULONG_PTR> entries(size_t{1} << 22);
     for (int attempt = 0;; ++attempt) {
         if (K32QueryWorkingSet(GetCurrentProcess(), entries.data(),
@@ -1275,13 +1277,20 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
     // write that lands after the check costs a soft fault and nothing else.
     std::vector<uintptr_t> trim;
     size_t zero_bytes = 0;
+    size_t pages_read = 0;
     for (const uintptr_t page : backing_pages) {
+        if (++pages_read % StopCheckPages == 0 && stop.stop_requested()) {
+            return {0, 0};
+        }
         if (IsZeroPage(reinterpret_cast<const u8*>(page))) {
             trim.push_back(page);
             zero_bytes += PageAlignment;
         }
     }
     for (const uintptr_t page : view_pages) {
+        if (++pages_read % StopCheckPages == 0 && stop.stop_requested()) {
+            return {0, 0};
+        }
         const auto offset = impl->BackingOffset(page - view_begin);
         if (!offset || *offset >= backing_size) {
             continue;
@@ -1295,6 +1304,9 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
         if (!std::binary_search(backing_pages.begin(), backing_pages.end(), backing_page)) {
             trim.push_back(backing_page);
         }
+    }
+    if (stop.stop_requested()) {
+        return {0, 0};
     }
     std::sort(trim.begin(), trim.end());
     trim.erase(std::unique(trim.begin(), trim.end()), trim.end());
@@ -1318,6 +1330,7 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
     }
     return {(backing_pages.size() + view_pages.size()) * PageAlignment, zero_bytes};
 #else
+    static_cast<void>(stop);
     return {0, 0};
 #endif
 }

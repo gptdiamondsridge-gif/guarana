@@ -312,6 +312,30 @@ TEST_CASE("HostMemory: Trim zero pages keeps contents", "[common]") {
     REQUIRE(all(backing + 0x400000, 0));
 }
 
+TEST_CASE("HostMemory: A stopped zero-page pass leaves the pages as they are", "[common]") {
+    // At a stop the pass ends at once: the guest memory it reads is about to be released.
+    constexpr size_t Page = 0x1000;
+    HostMemory mem(BACKING_SIZE, VIRTUAL_SIZE);
+    REQUIRE(mem.BackingBasePointer() != nullptr);
+    mem.Map(0x10000, 0x100000, Page, PERMS, HEAP);
+    u8* const view = mem.VirtualBasePointer() + 0x10000;
+    std::memset(view, 0, Page);
+    const auto resident = [](const void* address) {
+        PSAPI_WORKING_SET_EX_INFORMATION info{};
+        info.VirtualAddress = const_cast<void*>(address);
+        REQUIRE(QueryWorkingSetEx(GetCurrentProcess(), &info, sizeof(info)));
+        return info.VirtualAttributes.Valid != 0;
+    };
+    REQUIRE(resident(view));
+
+    std::stop_source stop;
+    stop.request_stop();
+    const auto [looked_at, trimmed] = mem.TrimZeroPages(stop.get_token());
+    REQUIRE(looked_at == 0);
+    REQUIRE(trimmed == 0);
+    REQUIRE(resident(view));
+}
+
 TEST_CASE("HostMemory: Protect within a view, across views and over a gap", "[common]") {
     constexpr size_t Page = 0x1000;
     HostMemory mem(BACKING_SIZE, VIRTUAL_SIZE);

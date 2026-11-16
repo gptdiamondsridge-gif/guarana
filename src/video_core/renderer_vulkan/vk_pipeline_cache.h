@@ -330,8 +330,9 @@ private:
     /// Cancels the v2 prebuild and waits for its running stages
     void StopBackgroundJobs();
 
-    /// Drops or waits for background GPL optimization builds once primary builds have finished
-    void FinishBackgroundBuilds();
+    /// Drops or waits for background GPL optimization builds once primary builds have finished.
+    /// Returns the pipelines it went through.
+    size_t FinishBackgroundBuilds();
 
     /// Waits for background GPL optimization builds that a worker has already started, leaving
     /// unstarted ones queued

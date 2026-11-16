@@ -39,6 +39,12 @@ DeviceMemory::DeviceMemory()
 
 DeviceMemory::~DeviceMemory() = default;
 
+void DeviceMemory::StopZeroTrim() {
+#ifdef _WIN32
+    zero_trim_thread.request_stop();
+#endif
+}
+
 #ifdef _WIN32
 // Windows can't punch holes in the guest memory section, so pages holding only zeros (games clear
 // their heaps while booting: Ocarina leaves ~7 GB) stay resident until they leave the working set.
@@ -84,7 +90,7 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         const auto start = std::chrono::steady_clock::now();
         std::pair<size_t, size_t> result;
         try {
-            result = buffer.TrimZeroPages();
+            result = buffer.TrimZeroPages(stop);
         } catch (const std::bad_alloc&) {
             // A pass needs 32 MiB and more of scratch. When Windows runs out of commit, the
             // exception leaving this thread ended the emulator (#1346); the pass is only a saving.
@@ -96,6 +102,9 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
                         usage.system_commit >> 20, usage.system_commit_limit >> 20,
                         usage.commit >> 20);
             continue;
+        }
+        if (stop.stop_requested()) {
+            return;
         }
         const auto [resident, trimmed] = result;
         auto& counters = Common::g_memory_counters;

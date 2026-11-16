@@ -2858,12 +2858,24 @@ static void StartExitWatchdog() {
     });
 }
 
+/// The emulation thread's CPU time so far, where the host can read it
+static std::optional<u64> EmuThreadCpuTimeNs() {
+    return QtCommon::emu_thread ? QtCommon::emu_thread->CpuTimeNs() : std::nullopt;
+}
+
+/// The last step the emulation teardown finished (its log has one line per step, with its time)
+static const char* LastShutdownStepName() {
+    const char* const step = Common::LastShutdownStep();
+    return step != nullptr ? step : "none, the teardown has not begun";
+}
+
 void MainWindow::OnEmulationStopTimeExpired() {
     if (QtCommon::emu_thread) {
         StartExitWatchdog();
+        Common::ClearLastShutdownStep();
         QtCommon::emu_thread->ForceStop();
         emu_force_stop_clock.start();
-        shutdown_progress_seen = Common::ShutdownProgress();
+        shutdown_watch.Reset(Common::ShutdownProgress(), EmuThreadCpuTimeNs());
         emu_terminate_timer.setSingleShot(true);
         emu_terminate_timer.start(EmuThreadStopTimeoutMs);
         connect(&emu_terminate_timer, &QTimer::timeout, this, &MainWindow::OnEmulationStopTimeout,
@@ -2872,9 +2884,9 @@ void MainWindow::OnEmulationStopTimeExpired() {
 }
 
 bool MainWindow::EmulationShutdownProgressing() {
-    const u64 progress = Common::ShutdownProgress();
-    const bool moved = progress != shutdown_progress_seen;
-    shutdown_progress_seen = progress;
+    // A step that notes no progress, as freeing guest memory, keeps the thread busy; a hung one
+    // waits without using the CPU.
+    const bool moved = shutdown_watch.Moved(Common::ShutdownProgress(), EmuThreadCpuTimeNs());
     return moved && emu_force_stop_clock.isValid() &&
            emu_force_stop_clock.elapsed() < MaxEmuThreadShutdownMs;
 }
@@ -2884,8 +2896,9 @@ void MainWindow::OnEmulationStopTimeout() {
     // another timeout. A stalled teardown ends the process (see ExitIfEmulationThreadStuck).
     if (QtCommon::emu_thread && QtCommon::emu_thread->isRunning() &&
         EmulationShutdownProgressing()) {
-        LOG_INFO(Frontend, "Emulation thread still shutting down after {} ms, waiting",
-                 emu_force_stop_clock.elapsed());
+        LOG_INFO(Frontend,
+                 "Emulation thread still shutting down after {} ms (last step done: {}), waiting",
+                 emu_force_stop_clock.elapsed(), LastShutdownStepName());
         emu_terminate_timer.start(EmuThreadStopTimeoutMs);
         return;
     }
@@ -2904,9 +2917,9 @@ void MainWindow::ExitIfEmulationThreadStuck() {
     // The stuck thread can hold a lock that the save needs. The save gets this long.
     exit_deadline_ms.store(SteadyNowMs() + 5'000, std::memory_order_relaxed);
     LOG_ERROR(Frontend,
-              "Emulation thread failed to stop after {} ms (shutdown progress {}); saving "
-              "settings and exiting",
-              emu_force_stop_clock.elapsed(), Common::ShutdownProgress());
+              "Emulation thread failed to stop after {} ms (shutdown progress {}, last step "
+              "done: {}); saving settings and exiting",
+              emu_force_stop_clock.elapsed(), Common::ShutdownProgress(), LastShutdownStepName());
     play_time_manager->Stop();
     UpdateUISettings();
     game_list->SaveInterfaceLayout();
@@ -2925,6 +2938,8 @@ void MainWindow::OnEmulationStopped() {
     if (QtCommon::emu_thread && QtCommon::emu_thread->isRunning()) {
         return;
     }
+    QElapsedTimer cleanup_clock;
+    cleanup_clock.start();
     if (bug_report_dialog) {
         bug_report_dialog->StopCapture();
     }
@@ -3014,7 +3029,7 @@ void MainWindow::OnEmulationStopped() {
     Settings::RestoreGlobalState(QtCommon::system->IsPoweredOn());
     QtCommon::system->HIDCore().ReloadInputDevices();
     UpdateStatusButtons();
-    LOG_INFO(Frontend, "Emulation cleanup completed");
+    LOG_INFO(Frontend, "Emulation cleanup completed in {} ms", cleanup_clock.elapsed());
     if (launcher_session) {
         // Back to the launcher rather than the game list, unless a restart boots again.
         QTimer::singleShot(0, this, &MainWindow::EndLauncherSession);

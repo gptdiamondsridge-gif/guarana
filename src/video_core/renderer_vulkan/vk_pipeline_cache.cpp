@@ -1428,9 +1428,9 @@ size_t KeptPipelines() {
 
 /// Destroys the pipelines of `pipelines` (a map or a deque of pairs holding unique_ptrs), telling
 /// the frontend every few hundred that the teardown still moves: tens of thousands of them took
-/// longer than the frontend waited for the emulation thread.
+/// longer than the frontend waited for the emulation thread. Returns how many it destroyed.
 template <typename Container>
-void DestroyPipelinesWithProgress(Container& pipelines) {
+size_t DestroyPipelinesWithProgress(Container& pipelines) {
     constexpr size_t ProgressEvery = 256;
     size_t destroyed = 0;
     for (auto& entry : pipelines) {
@@ -1441,6 +1441,7 @@ void DestroyPipelinesWithProgress(Container& pipelines) {
     }
     pipelines.clear();
     Common::NoteShutdownProgress();
+    return destroyed;
 }
 
 /// EDEN_NX2_BOOT_ASYNC=1: the guest starts once the cache's records are read and the compute
@@ -1538,33 +1539,66 @@ struct PipelineCache::AsyncBoot {
 };
 
 PipelineCache::~PipelineCache() {
+    // Each step is timed in the log and tells the frontend the teardown still moves (#239).
     serialization_stop.request_stop();
     StopBackgroundJobs();
+    Common::ShutdownStepDone("GPU: pipeline cache: background prebuild stopped");
     // The pipelines' builds end before the driver pipeline cache they build into goes, including
     // optional GPL builds running on their own low-priority worker pool.
     shader_jobs->Shutdown();
-    Common::NoteShutdownProgress();
-    FinishBackgroundBuilds();
+    Common::ShutdownStepDone("GPU: pipeline cache: shader workers joined");
+    const size_t background_builds = FinishBackgroundBuilds();
+    Common::ShutdownStepDone("GPU: pipeline cache: optimized builds dropped or waited for",
+                             background_builds);
     serialization_thread.WaitForRequests();
-    Common::NoteShutdownProgress();
+    Common::ShutdownStepDone("GPU: pipeline cache: queued cache records written");
     SaveUsedPipelines();
+    Common::ShutdownStepDone("GPU: pipeline cache: used pipelines list saved");
     if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
         // shader_jobs->Shutdown() and FinishBackgroundBuilds() above already joined all build
         // workers, so the driver pipeline cache is quiescent before it is serialized.
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
                                      CACHE_VERSION);
     }
-    Common::NoteShutdownProgress();
+    Common::ShutdownStepDone("GPU: pipeline cache: driver pipeline cache saved");
     LogRuntimePipelineTotals();
     // After the records the serialization thread queued: its writer drains on destruction
     shader_cache_v2 = nullptr;
     cache_v2.reset();
-    Common::NoteShutdownProgress();
-    DestroyPipelinesWithProgress(graphics_cache);
-    DestroyPipelinesWithProgress(evicted_pipelines);
+    Common::ShutdownStepDone("GPU: pipeline cache: shader cache v2 closed");
+    const size_t graphics_destroyed = DestroyPipelinesWithProgress(graphics_cache);
+    Common::ShutdownStepDone("GPU: pipeline cache: graphics pipelines destroyed",
+                             graphics_destroyed);
+    const size_t evicted_destroyed = DestroyPipelinesWithProgress(evicted_pipelines);
+    Common::ShutdownStepDone("GPU: pipeline cache: evicted pipelines destroyed",
+                             evicted_destroyed);
+    {
+        // Before the members go, with progress like the graphics ones: as members they were
+        // destroyed with none, and the frontend took a long teardown for a hung one.
+        size_t compute_destroyed = 0;
+        for (auto& entry : compute_cache) {
+            entry.second.pending_rebuild.reset();
+            entry.second.pipeline.reset();
+            if (++compute_destroyed % 256 == 0) {
+                Common::NoteShutdownProgress();
+            }
+        }
+        compute_cache.clear();
+        compute_destroyed += DestroyPipelinesWithProgress(retired_compute_pipelines);
+        Common::ShutdownStepDone("GPU: pipeline cache: compute pipelines destroyed",
+                                 compute_destroyed);
+    }
+    {
+        std::scoped_lock lock{translated_mutex};
+        const size_t translated = translated_graphics.size();
+        translated_graphics.clear();
+        Common::ShutdownStepDone("GPU: pipeline cache: translated pipelines never adopted",
+                                 translated);
+    }
     if (pipeline_binaries) {
         pipeline_binaries->LogCounts("at the end of the session");
         pipeline_binaries.reset();
+        Common::ShutdownStepDone("GPU: pipeline cache: pipeline binaries");
     }
 }
 
@@ -2084,7 +2118,7 @@ void PipelineCache::StopBackgroundJobs() {
     }
 }
 
-void PipelineCache::FinishBackgroundBuilds() {
+size_t PipelineCache::FinishBackgroundBuilds() {
     constexpr size_t ProgressEvery = 256;
     size_t drained = 0;
     const auto note_progress = [&] {
@@ -2114,6 +2148,7 @@ void PipelineCache::FinishBackgroundBuilds() {
         note_progress();
     }
     Common::NoteShutdownProgress();
+    return drained;
 }
 
 void PipelineCache::WaitForRunningBackgroundBuilds() {

@@ -16,6 +16,7 @@
 #include "common/common_types.h"
 #include "common/dkb_cpu_trace.h"
 #include "common/dkb_frame_trace.h"
+#include "common/shutdown_progress.h"
 #include "video_core/control/channel_state_cache.h"
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
@@ -322,6 +323,10 @@ private:
     s32 bound_channel_id = -1;
     Scheduler& scheduler;
 
+    // Each marker ends the teardown step (#239) of the members declared after it, up to the next
+    // marker: members are destroyed in reverse order.
+    Common::ShutdownStepMarker staging_destroyed{
+        "GPU: render passes, blits, descriptors and staging buffers"};
     StagingBufferPool staging_pool;
     DescriptorPool descriptor_pool;
     GuestDescriptorQueue guest_descriptor_queue;
@@ -330,13 +335,20 @@ private:
     BlitImageHelper blit_image;
     RenderPassCache render_pass_cache;
 
+    Common::ShutdownStepMarker texture_cache_destroyed{"GPU: texture cache"};
     TextureCacheRuntime texture_cache_runtime;
     TextureCache texture_cache;
+    Common::ShutdownStepMarker buffer_cache_destroyed{"GPU: buffer cache"};
     BufferCacheRuntime buffer_cache_runtime;
     BufferCache buffer_cache;
+    Common::ShutdownStepMarker query_cache_destroyed{"GPU: query cache"};
     QueryCacheRuntime query_cache_runtime;
     QueryCache query_cache;
+    Common::ShutdownStepMarker pipeline_cache_destroyed{
+        "GPU: pipeline cache: pipeline libraries, pools and workers"};
     PipelineCache pipeline_cache;
+    Common::ShutdownStepMarker rasterizer_state_destroyed{
+        "GPU: rasterizer's fences, frame dump, upscalers and draw state"};
     AccelerateDMA accelerate_dma;
     FenceManager fence_manager;
     FrameDump frame_dump;

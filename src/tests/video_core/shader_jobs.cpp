@@ -1217,6 +1217,67 @@ TEST_CASE("A pipeline build job is dropped while queued and run by a waiting dra
     REQUIRE(builds == 3);
 }
 
+TEST_CASE("An optional build still queued on its pool is dropped when its pipeline goes",
+          "[video_core][shader_jobs]") {
+    // The optimized GPL links (EDEN_NX2_GPL_OPTIMIZE_THREADS) at a stop: pipelines destroyed with
+    // their optional build still queued must not build it on the stopping thread.
+    Common::ThreadWorker workers{1, "TestOptimize"};
+    Gate gate;
+    std::promise<void> blocker_started;
+    workers.QueueWork([&] {
+        blocker_started.set_value();
+        gate.Wait();
+    });
+    blocker_started.get_future().wait();
+    std::atomic<int> builds{};
+    std::atomic<int> builds_on_this_thread{};
+    const auto test_thread = std::this_thread::get_id();
+    const auto task = [&] {
+        ++builds;
+        if (std::this_thread::get_id() == test_thread) {
+            ++builds_on_this_thread;
+        }
+    };
+    {
+        Vulkan::PipelineBuild dropped{&workers, task, true};
+        REQUIRE_FALSE(dropped.Running());
+    }
+    REQUIRE(builds == 0);
+    {
+        // Without drop_unstarted, the destroying thread builds it: why every optional build sets
+        // it.
+        Vulkan::PipelineBuild kept{&workers, task, false};
+    }
+    REQUIRE(builds == 1);
+    REQUIRE(builds_on_this_thread == 1);
+    gate.Open();
+    workers.WaitForRequests();
+    // The queued tasks of both ran on the worker and built nothing more.
+    REQUIRE(builds == 1);
+
+    // One a worker is building is waited for, not dropped.
+    Gate build_gate;
+    std::promise<void> build_started;
+    std::atomic<bool> build_finished{};
+    std::optional<Vulkan::PipelineBuild> running;
+    running.emplace(
+        &workers,
+        [&] {
+            build_started.set_value();
+            build_gate.Wait();
+            build_finished = true;
+        },
+        true);
+    build_started.get_future().wait();
+    REQUIRE(running->Running());
+    auto destroy = std::async(std::launch::async, [&] { running.reset(); });
+    const bool destroy_waited = destroy.wait_for(20ms) == std::future_status::timeout;
+    build_gate.Open();
+    destroy.get();
+    REQUIRE(destroy_waited);
+    REQUIRE(build_finished);
+}
+
 namespace {
 using Common::ThreadPriority;
 

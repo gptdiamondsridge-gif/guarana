@@ -712,12 +712,22 @@ struct System::Impl {
     /// Stops the running program and releases what it used, keeping the System reusable for
     /// the next Load.
     void ShutdownMainProcess() {
+        // Each step is logged with its time (#239); each done also tells the frontend that the
+        // teardown still moves (see Common::ShutdownProgress).
+        Common::BeginShutdownSteps();
+        // A Switch 2 program's guest memory is released at the end: its zero-page trim stops now,
+        // and a pass in progress ends at its next check, instead of reading memory that goes.
+        const bool release_guest_memory = Settings::CurrentProgramIsSwitch2();
+        if (release_guest_memory && device_memory) {
+            device_memory->StopZeroTrim();
+        }
         autopilot_session.reset();
         power_session.reset();
         VideoCore::Nx2Debug::EndSession();
         debug_service.reset();
         SetShuttingDown(true);
         Common::ADPF::Shutdown();
+        Common::ShutdownStepDone("debug server, power and autopilot sessions");
 
         // Reset per-game flags
         Settings::values.use_squashed_iterated_blend = false;
@@ -727,6 +737,7 @@ struct System::Impl {
         // they crashed it (a null ServiceManager at a stop, #1950). Its destructor waits for a
         // run in progress.
         cheat_engine.reset();
+        Common::ShutdownStepDone("cheats");
 
         // Once powered off, services stop writing replies, so a guest thread whose IPC call
         // completes would read its own request back and abort (2010-0212, a Userspace PANIC on
@@ -738,38 +749,44 @@ struct System::Impl {
         exit_requested = false;
         if (gpu_core)
             gpu_core->NotifyShutdown();
+        Common::ShutdownStepDone("GPU threads stopped");
 
         stop_event.request_stop();
         core_timing.SyncPause(false);
         Network::CancelPendingSocketOperations();
         kernel.SuspendEmulation(true);
+        Common::ShutdownStepDone("guest threads suspended");
         if (service_manager) {
             // Services on host threads that still wait for one on the guest cores give up (after
             // a close during the boot shader load, the guest cores never started).
             service_manager->Close();
         }
         kernel.CloseServices();
+        Common::ShutdownStepDone("services closed");
         applet_manager.DropPendingProcess();
         kernel.ShutdownCores();
-        // Each step done tells the frontend the teardown still moves (see
-        // Common::ShutdownProgress); the GPU's (pipeline caches) reports its own steps.
-        Common::NoteShutdownProgress();
+        Common::ShutdownStepDone("guest cores stopped");
         services.reset();
         service_manager.reset();
+        Common::ShutdownStepDone("services destroyed");
         fs_controller.Reset();
         core_timing.ClearPendingEvents();
         app_loader.reset();
-        Common::NoteShutdownProgress();
+        Common::ShutdownStepDone("file systems and loader");
         audio_core.reset();
-        Common::NoteShutdownProgress();
+        Common::ShutdownStepDone("audio");
+        // The renderer ends steps of its own (pipeline caches, texture cache, Vulkan device); this
+        // one is what is left after the last of them (the Vulkan instance and library).
         gpu_core.reset();
-        Common::NoteShutdownProgress();
+        Common::ShutdownStepDone("GPU: Vulkan instance and the rest");
         host1x_core.reset();
+        Common::ShutdownStepDone("host1x");
         // The renderer reads the preset values until it is gone.
         Settings::ClearPresetValues();
         perf_stats.reset();
         cpu_manager.Shutdown();
         debugger.reset();
+        Common::ShutdownStepDone("CPU manager and debugger");
         {
             // The general channel's event is a kernel object made on first use. Left for ~Impl,
             // it closed at exit() on a kernel already shut down (SIGSEGV in KAutoObject::Close).
@@ -779,6 +796,7 @@ struct System::Impl {
             general_channel_context.reset();
         }
         kernel.Shutdown();
+        Common::ShutdownStepDone("kernel");
         stop_event = {};
         Network::RestartSocketOperations();
 
@@ -789,16 +807,18 @@ struct System::Impl {
 
         // Reset all glue registrations
         arp_manager.ResetAll();
+        Common::ShutdownStepDone("network and glue registrations");
 
         // The guest RAM section keeps every page the game touched until it is destroyed (up to
         // 12 GiB), and the next Load reuses it. Switch 2 only: Switch 1 keeps its behaviour.
         // InitializeKernel creates it again, sized for the next game.
-        if (Settings::CurrentProgramIsSwitch2()) {
+        if (release_guest_memory) {
             device_memory.reset();
             guest_memory_released = true;
+            Common::ShutdownStepDone("guest memory released");
         }
 
-        LOG_DEBUG(Core, "Shutdown OK");
+        Common::EndShutdownSteps();
     }
 
     bool IsShuttingDown() const {

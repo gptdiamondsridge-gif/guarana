@@ -16,6 +16,7 @@
 #include "common/assert.h"
 #include "common/logging.h"
 #include "common/scope_exit.h"
+#include "common/shutdown_progress.h"
 #include "common/thread.h"
 #include "common/thread_worker.h"
 #include "core/arm/arm_interface.h"
@@ -151,8 +152,10 @@ struct KernelCore::Impl {
                 LOG_WARNING(Kernel, "Application process still had {} references at shutdown",
                             references);
             }
+            Common::ShutdownStepDone("kernel: application process closed");
             auto& arena = system.DeviceMemory().buffer;
             arena.Unmap(0, arena.VirtualSize(), false);
+            Common::ShutdownStepDone("kernel: guest memory unmapped");
         }
 
         next_object_id = 0;

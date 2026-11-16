@@ -219,6 +219,32 @@ emulator keeps that file. On other drivers a missing file is normal, and nothing
 | Debug server `power_set`, `frame_budget`, `speed_limit` | Memory | Not reset between games today (`src/core/debugger/nx2_debug_tools.cpp`); not covered by [#125][125] |
 | Global settings | `qt-config.ini` | Saved when the emulator closes (today, `qt_config.cpp:59-62`). This is why a flush must wait until the emulator is closed (R5) |
 
+### The stop, step by step
+
+A stop logs `Shutdown begins`, then one `Shutdown step N took X ms: <step> (progress P)` line per
+step as it ends, and `Shutdown took X ms in N steps; the slowest took Y ms: <step>` ([#239][239]).
+The steps, in order: the debug server and sessions, cheats, the GPU threads, guest threads
+suspended, services closed, guest cores, services destroyed, file systems and loader, audio; then
+the renderer (`GPU: ...`): the wait for the GPU to idle, frame generation, the rasterizer's last
+work, its fences and upscalers, the pipeline cache (prebuild stopped, shader workers joined,
+optimized builds, queued cache records, used pipelines list, driver pipeline cache saved, shader
+cache v2 closed, then graphics, evicted and compute pipelines destroyed with their counts, then its
+libraries, pools and workers), the query, buffer and texture caches, render passes, descriptors
+and staging buffers, the swapchain and presenter, the scheduler, the memory allocator, the Vulkan
+device, and the Vulkan instance; then host1x, the CPU manager, the kernel (the application process
+closed, guest memory unmapped, the rest), network, and for a Switch 2 game the release of guest
+memory (its zero-page trim, Windows only, is stopped when the teardown begins). Steps are in
+`core/core.cpp` (`ShutdownMainProcess`), `core/hle/kernel/kernel.cpp`,
+`renderer_vulkan.cpp`, `vk_rasterizer.cpp` and `vk_pipeline_cache.cpp`; the renderer's and
+rasterizer's member destruction is timed by the `ShutdownStepMarker` members in their headers.
+
+The frontend waits 10 s at a time for the teardown while it moves: a step was done, or the
+emulation thread used at least 1 s of CPU since the last check (a step that frees memory notes no
+progress but keeps the thread busy). It gives up 3 minutes after the stop, or when a check finds
+neither, and then logs `Emulation thread failed to stop after N ms (shutdown progress P, last step
+done: <step>)`: the step after the one named is the one that hung. `Emulation cleanup completed in N
+ms` is the frontend's own part, after the emulation thread ended.
+
 ## When the doctor runs
 
 | Moment | What runs | Status |
@@ -235,3 +261,4 @@ emulator keeps that file. On other drivers a missing file is normal, and nothing
 [107]: https://github.com/karimalsalah/guarana/issues/107
 [122]: https://github.com/karimalsalah/guarana/pull/122
 [125]: https://github.com/karimalsalah/guarana/issues/125
+[239]: https://github.com/karimalsalah/guarana/issues/239

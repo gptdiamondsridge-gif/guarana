@@ -26,6 +26,7 @@
 #include "common/nextendo.h"
 #include "common/nextendo_game_catalog.h"
 #include "common/settings_enums.h"
+#include "common/shutdown_progress.h"
 #include "core/file_sys/nup_writer.h"
 #include "frontend_common/content_manager.h"
 #include "input_common/drivers/tas_input.h"
@@ -491,7 +492,8 @@ private slots:
     void OnEmulationStopTimeExpired();
     void OnEmulationStopTimeout();
     /// True while the emulation thread's teardown still makes progress (Common::ShutdownProgress
-    /// moved since the last call), for at most MaxEmuThreadShutdownMs after it was asked to stop.
+    /// moved since the last call, or the thread was busy on the CPU meanwhile), for at most
+    /// MaxEmuThreadShutdownMs after it was asked to stop.
     bool EmulationShutdownProgressing();
 
 #ifdef ENABLE_UPDATE_CHECKER
@@ -600,7 +602,7 @@ private:
     QTimer shutdown_timer;
     QTimer emu_terminate_timer;
     QElapsedTimer emu_force_stop_clock;
-    u64 shutdown_progress_seen{};
+    Common::ShutdownWatch shutdown_watch;
     QTimer nextendo_session_timer;
     QFutureWatcher<Common::Nextendo::SignOutReason> nextendo_session_watcher;
     QFutureWatcher<std::optional<Common::Nextendo::OnlineStatus>> nextendo_status_watcher;

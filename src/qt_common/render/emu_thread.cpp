@@ -21,6 +21,8 @@ EmuThread::~EmuThread() = default;
 
 void EmuThread::run() {
     Common::SetCurrentThreadName("EmuControlThread");
+    m_cpu_clock.emplace();
+    m_cpu_clock_ready.store(true, std::memory_order_release);
 
     auto& gpu = QtCommon::system->GPU();
     auto stop_token = m_stop_source.get_token();
