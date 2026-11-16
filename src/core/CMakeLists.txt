@@ -1300,6 +1300,11 @@ if (ENABLE_WEB_SERVICE)
     target_link_libraries(core PUBLIC web_service)
 endif()
 
+# The NCE readiness report (EDEN_NX2_NCE_REPORT) decodes guest code on every host.
+target_sources(core PRIVATE
+    arm/nce/readiness.cpp
+    arm/nce/readiness.h)
+
 if (HAS_NCE)
     enable_language(C ASM)
     set(CMAKE_ASM_FLAGS "${CFLAGS} -x assembler-with-cpp")
