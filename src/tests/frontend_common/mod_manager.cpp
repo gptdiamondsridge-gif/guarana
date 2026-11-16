@@ -140,6 +140,66 @@ TEST_CASE("A mod of the same name is replaced only when told to", "[mod_manager]
     }
 }
 
+TEST_CASE("An install clears only what it may", "[mod_manager]") {
+    ModTestDirs dirs;
+    const fs::path load = dirs.root / "load";
+    const fs::path staging = load / ".install-staging";
+
+    SECTION("Files an earlier install left in the staging folder are not installed") {
+        ModTestDirs::Write(staging / "new" / "romfs" / "stale.txt", "stale");
+        REQUIRE(FrontendCommon::InstallMod(dirs.Source("Cool Mod", "romfs/a.txt", "new"),
+                                           ProgramId) == FrontendCommon::Success);
+        CHECK(ModTestDirs::Read(ModTestDirs::Installed("Cool Mod") / "romfs" / "a.txt") == "new");
+        CHECK_FALSE(fs::exists(ModTestDirs::Installed("Cool Mod") / "romfs" / "stale.txt"));
+        CHECK_FALSE(fs::exists(staging));
+    }
+
+    SECTION("A mod an interrupted install moved aside is kept") {
+        // Cut off between moving the installed mod aside and putting the new one in its place,
+        // an install leaves the only copy of the installed mod in the staging folder.
+        ModTestDirs::Write(staging / "replaced" / "romfs" / "a.txt", "old");
+        REQUIRE(FrontendCommon::InstallMod(dirs.Source("Cool Mod", "romfs/b.txt", "new"),
+                                           ProgramId) == FrontendCommon::Success);
+        CHECK(ModTestDirs::Read(ModTestDirs::Installed("Cool Mod") / "romfs" / "b.txt") == "new");
+        CHECK_FALSE(fs::exists(staging));
+
+        int kept = 0;
+        for (const auto& entry : fs::directory_iterator(load)) {
+            if (entry.path().filename().string().starts_with(".install-kept-")) {
+                ++kept;
+                CHECK(ModTestDirs::Read(entry.path() / "replaced" / "romfs" / "a.txt") == "old");
+            }
+        }
+        CHECK(kept == 1);
+    }
+}
+
+TEST_CASE("A mod's name names one folder in the folder it goes in", "[mod_manager]") {
+    for (const char* name : {"Cool Mod", ".hidden", "Mod v1.2"}) {
+        CAPTURE(name);
+        CHECK(FrontendCommon::IsModName(name));
+    }
+    for (const char* name : {"", ".", "..", "a/b", "a\\b", "/", "\\"}) {
+        CAPTURE(name);
+        CHECK_FALSE(FrontendCommon::IsModName(name));
+    }
+#ifdef _WIN32
+    // Joined to a folder on drive C:, "D:" and "D:." are drive D's current folder, and "C:" is the
+    // folder itself. Windows drops the periods and spaces a name ends with, so "...", " " and ". ."
+    // name the folder itself too, and "Mod." names "Mod".
+    for (const char* name : {"D:", "D:.", "C:", "a:b", "...", " ", ". .", "Mod.", "Mod "}) {
+        CAPTURE(name);
+        CHECK_FALSE(FrontendCommon::IsModName(name));
+    }
+#else
+    // Elsewhere these are names like any other.
+    for (const char* name : {"D:", "a:b", "Mod.", "Mod "}) {
+        CAPTURE(name);
+        CHECK(FrontendCommon::IsModName(name));
+    }
+#endif
+}
+
 TEST_CASE("A mod is installed under the name it is given", "[mod_manager]") {
     ModTestDirs dirs;
     const fs::path source = dirs.Source("folder", "exefs/x.pchtxt", "patch");

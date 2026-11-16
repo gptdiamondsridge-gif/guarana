@@ -60,6 +60,11 @@ std::vector<std::filesystem::path> GetModFolder(const std::string& root);
 /// The folder that holds a game's mods, one folder per mod.
 [[nodiscard]] std::filesystem::path GetModsDir(u64 program_id);
 
+/// Whether `name` names one folder inside the folder it is joined to: not empty, "." or "..", and
+/// without "/" or "\". On Windows also without ":", since a folder joined with "D:" is drive D's
+/// current folder, and not ending in "." or " ", which Windows drops.
+[[nodiscard]] bool IsModName(std::string_view name);
+
 /// The name InstallMod installs `path` under with `options`.
 [[nodiscard]] std::string InstalledModName(const std::filesystem::path& path,
                                            const ModInstallOptions& options = {});

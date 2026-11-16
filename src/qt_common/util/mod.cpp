@@ -51,11 +51,13 @@ QStringList GetModFolders(const QString& root, const QString& fallbackName,
         if (name.isEmpty())
             return {};
 
-        // The name becomes the name of a folder, here and where the mod is installed.
-        if (name == QStringLiteral(".") || name == QStringLiteral("..") ||
-            name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\\'))) {
-            QtCommon::Frontend::Critical(tr("Mod Name"),
-                                         tr("A mod's name cannot be . or .., or contain / or \\"));
+        // The name becomes the name of a folder, here and where the mod is installed. On Windows
+        // a name like "D:" would make the temporary folder below drive D's current folder.
+        if (!FrontendCommon::IsModName(name.toStdString())) {
+            QtCommon::Frontend::Critical(
+                tr("Mod Name"),
+                tr("A mod's name becomes the name of its folder, so it cannot be . or .., contain "
+                   "/ or \\, or, on Windows, contain : or end with a period or a space."));
             return {};
         }
 

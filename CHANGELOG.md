@@ -152,6 +152,10 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
   launcher update) asks for microphone access, and Ocarina of Time waited on that prompt before
   its first frame, though it never captures
   ([#199](https://github.com/karimalsalah/guarana/issues/199)).
+- Mod import on Windows refuses a mod name such as `D:`, or one that ends in a period or a space.
+  `D:` made the folder the import clears the current folder of drive D, usually its root, so a
+  mod whose type had to be picked by hand could delete files on another drive. An import that was
+  cut off no longer loses the mod it had moved aside to replace.
 
 ## [20.4.0] - 2026-11-16
 

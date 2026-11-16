@@ -44,10 +44,12 @@ std::string LowerAscii(std::string text) {
     return text;
 }
 
-// A mod's name is the name of one folder in the game's mod folder.
-bool IsModName(std::string_view name) {
-    return !name.empty() && name != "." && name != ".." &&
-           name.find_first_of("/\\") == std::string_view::npos;
+// A folder beside the staging folder that no install clears, for what is left of a mod an install
+// could not finish.
+fs::path KeptDir(const fs::path& load_dir) {
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch());
+    return load_dir / fmt::format(".install-kept-{}", now.count());
 }
 
 // Whether a mod.json holds nothing but what WriteModInfo writes, so it is ours to replace.
@@ -97,6 +99,21 @@ fs::path GetModsDir(u64 program_id) {
            fmt::format("{:016X}", program_id);
 }
 
+bool IsModName(std::string_view name) {
+    if (name.empty() || name == "." || name == ".." ||
+        name.find_first_of("/\\") != std::string_view::npos) {
+        return false;
+    }
+#ifdef _WIN32
+    // A folder joined with "D:" is replaced by drive D's current folder, and Windows drops the
+    // periods and spaces a name ends with.
+    if (name.find(':') != std::string_view::npos || name.back() == '.' || name.back() == ' ') {
+        return false;
+    }
+#endif
+    return true;
+}
+
 std::string InstalledModName(const fs::path& path, const ModInstallOptions& options) {
     if (!options.name.empty()) {
         return options.name;
@@ -137,7 +154,28 @@ ModInstallResult InstallMod(const fs::path& path, u64 program_id,
     const fs::path staging = load_dir / Utf8Path(STAGING_DIR);
     const fs::path staged = staging / "new";
     const fs::path replaced = staging / "replaced";
+    if (fs::exists(replaced, ec)) {
+        // An install that was cut off (the emulator closed or crashed) moved a mod here and did
+        // not put it back: it may be the only copy left, so it is kept, not cleared.
+        const fs::path kept = KeptDir(load_dir);
+        fs::rename(staging, kept, ec);
+        if (ec) {
+            LOG_ERROR(Frontend,
+                      "Mod install failed: {} holds a mod an earlier install did not put back, "
+                      "and it could not be moved aside: {}",
+                      Common::FS::PathToUTF8String(staging), ec.message());
+            return Failed;
+        }
+        LOG_WARNING(Frontend, "A mod an earlier install did not put back was kept in {}",
+                    Common::FS::PathToUTF8String(kept));
+    }
+    // Anything else left there would be copied in with this mod.
     fs::remove_all(staging, ec);
+    if (ec) {
+        LOG_ERROR(Frontend, "Mod install failed: {} could not be cleared: {}",
+                  Common::FS::PathToUTF8String(staging), ec.message());
+        return Failed;
+    }
 
     // Copy first. Until the copy is complete, a mod installed under this name is not touched.
     try {
@@ -194,9 +232,7 @@ ModInstallResult InstallMod(const fs::path& path, u64 program_id,
         }
         // The installed mod is gone or could not go back: what the staging folder holds is all
         // that is left, so it is kept under a name the next install does not clear.
-        const auto now = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch());
-        const fs::path kept = load_dir / fmt::format(".install-kept-{}", now.count());
+        const fs::path kept = KeptDir(load_dir);
         fs::rename(staging, kept, ec);
         LOG_ERROR(Frontend, "What is left of mod {} is in {}", name,
                   Common::FS::PathToUTF8String(ec ? staging : kept));
