@@ -257,7 +257,8 @@ jobs:
             runner: macos-15
           # Windows on ARM (Snapdragon X laptops): clang-cl for ARM64 on GitHub's Windows ARM64
           # runner, ThinLTO, dynarmic's ARM64 backend. Qt is Eden-CI's static bundle
-          # (LICHII_USE_BUNDLED_QT), as in Eden's own ARM64 builds. No PGO: the profile is x64's.
+          # (LICHII_USE_BUNDLED_QT), which CMakeLists.txt links with the static runtime on ARM64. No PGO:
+          # the profile is x64's.
           - platform: windows-arm64
             runner: windows-11-arm
 
