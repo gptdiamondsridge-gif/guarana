@@ -11,7 +11,7 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
 
 ## [Unreleased]
 
-## [20.5.0]
+## [20.5.0] - 2026-11-16
 
 ### Added
 
@@ -25,6 +25,56 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
   unchecked by default (Properties > Add-Ons), and with more than one checked the fastest
   applies. A built-in add-on can now be off until it is checked: `[DisabledAddOns]` then holds
   `+<name>` for it (Lichii #1422).
+- Android: release and nightly builds include `guarana-<version>-android-arm64.apk` (Android 13 or
+  newer): the app under Guarana's own id, `io.github.karimalsalah.guarana`, which reads the player's
+  `nx2_switches.txt` from its user folder as the desktop builds do. Until the release key is set up
+  ([docs/SIGNING.md](docs/SIGNING.md), "Android") it is a preview build,
+  `io.github.karimalsalah.guarana.preview`. Nobody on the project has booted it on a device yet.
+- [docs/ARM64.md](docs/ARM64.md): Guarana on Snapdragon X laptops and Android handhelds: what runs
+  where, how CI builds the Windows ARM64 and Android packages, what the renderer needs from Adreno
+  drivers (mesh shaders above all), the expected gains, and the call for testers.
+- Issue forms for ARM64 testers: Snapdragon X laptops (Adreno X1 / X2) and Android devices (Adreno
+  6xx to 8xx, other Android GPUs) in every "Graphics card" list, "Windows 11 on ARM" and "Android" in
+  the operating system lists, and "Phone or tablet" as a device report form factor. New issues get the
+  `QUALCOMM`, `arm64` and `android` labels, and the benchmarks page filters reports by Qualcomm GPUs
+  and by phones and tablets.
+- Benchmark: boot suites. `tools/bench/suites/console-boot.json` measures launch to gameplay and
+  first-visit hitches in one command, every boot and shader switch against the baseline with a
+  cold, a second and a warm shader cache (and the GPU driver's cache with `--driver-cache-dir`),
+  three times; each row has the boot phases, the held draws and builds to the scene and the
+  stutter frames, and is invalid when its cache was not in the state it claims
+  ([docs/console-boot.md](docs/console-boot.md)).
+- Device reports: each report gets the engine's GPU family (Arrow Lake-H, Lunar Lake, Radeon 780M,
+  Steam Deck LCD and the others) when it names its GPU exactly, and the new
+  `site/data/community-evidence.json` counts reports and devices per family, game and build, with
+  the effects that paired `tools/bench` rows measured. Nothing reads it to change a default yet
+  ([#24](https://github.com/karimalsalah/guarana/issues/24)).
+- Experimental `EDEN_NX2_FG_GAME_MOTION`: with `EDEN_NX2_FLUID_INTERP`, in-between frames are
+  warped from the game's motion (Ocarina of Time's motion guide: the camera from the scene depth,
+  and Link) instead of optical flow, and what one real frame no longer shows is filled from the
+  other by depth. Off by default and not measured yet; `tools/bench/suites/game-motion-fg.json`
+  measures it against the optical-flow interpolation the game ships with at 120 Hz.
+- Design for the game's own reconstruction network and motion on integrated GPUs
+  (`docs/design/game-reconstruction-and-motion.md`), and the bench suite of its first step:
+  `tools/bench/suites/game-network.json` measures Ocarina of Time's anti-aliasing network with
+  each existing way of running its tensor instructions (software, the shared-memory gather,
+  Intel's 8x16x16 cooperative matrices), with the game presets off so the network actually runs.
+- Experimental switches for the game's own tensor networks on matrix units that go through shared
+  memory (AMD's 16x16x16, Intel's 8x16x16): `EDEN_NX2_HMMA_ZERO_C` starts an HMMA whose accumulator
+  is zero from a zero matrix instead of a stored C tile (bit-exact), and `EDEN_NX2_HMMA_K16_ONCE`
+  runs a K=16 HMMA as one 8x16x16 product per row half, rounding once. The diagnostic
+  `EDEN_NX2_TENSOR_LOG` logs each tensor program's HMMA counts and the path they take, and
+  `tools/bench/suites/game-network-a1.json` measures the two switches on Ocarina of Time. All off by
+  default and not measured yet.
+- `EDEN_NX2_LOAD_SAVE=1` (experimental, off by default): on Intel's Windows driver the boot load
+  saves the driver pipeline cache once its builds have ended and starts the background prebuild
+  after it, so a crash or kill later in the session no longer loses that boot's driver builds
+  (port of [Lichii #1838](https://github.com/zortos293/Lichii/pull/1838); step B6 of
+  [docs/console-boot.md](docs/console-boot.md)).
+- Performance overlay: a memory row with the RAM Guarana holds and the RAM the PC has free, and the
+  GPU memory it uses with the room the driver still gives it, amber when either runs low. On an
+  integrated GPU the GPU memory is marked shared and its room is bounded by the free RAM. Ported
+  from Fritchii (Frizti/Fritchii `58f55cb7d9`, `8627ff4233`).
 
 ### Changed
 
@@ -59,6 +109,30 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
   that has no mods yet.
 - Add-Ons: a warning under the list names the game files that more than one ticked mod replaces
   and the mod whose file the game gets, which is the first one in name order.
+- The game network suites now log each tensor program's path (`EDEN_NX2_TENSOR_LOG` in
+  `game-network.json` too) and say which GPUs their matrix arms apply to: the Arc 140T's driver lists
+  only 8x8x16 shapes with fp32 accumulators and 8x8x32 8-bit shapes, so `EDEN_NX2_INTEL_COOP_MATRIX`
+  and the A1 switches do nothing there (they apply to Xe2 and RDNA 3). The design gains step A1b, an
+  8x8x16 path for the 140T, and says to read only each suite's second pass (every arm compiles cold).
+- CI: only pushes save the build's dependency and compiler cache; pull requests restore the
+  newest one of their base. A day of pull requests had filled the repository's 10 GB of Actions
+  cache with caches only their own pull request could read, which evicted `main`'s and made its
+  next Windows build start cold (65 minutes instead of about 9).
+- Upstream: merged zortos293/Lichii `nx2` from `99e89096cb` to `7c7f723b68` (50 commits).
+  Among them: Nextendo online play no longer needs a special build and follows Configure >
+  Network, still off by default (Lichii #1979); with it on, a game's signed NPLN patch is checked
+  before boot ("Checking online patches") and applied after mods (Lichii #1358), with Nextendo's
+  network rules and signed game catalogue (Lichii #1984) and Splatoon 3's network requests
+  (Lichii #1988). Ocarina of Time's No sharpening copies the image the output pass samples, which
+  ends a frozen 3D under a live HUD (Lichii #1875), and skips the unused heavy dispatch while the
+  output is replaced (Lichii #1941). A lost Vulkan device ends the process with a log line instead
+  of an unhandled exception (Lichii #1938); a buffer without memory frees staging memory and
+  retries (Lichii #1963, #1931); padded depth targets are drawn as the square they are (Lichii
+  #1868); terminated threads and a stopped game's kernel objects close safely (Lichii #1957,
+  #1932); and bounds fixes in the NSO, KIP, NPDM, NCZ, ticket and XTS readers. Help > Check for
+  Updates stays hidden in our releases, which are built without the update checker. With
+  `EDEN_NX2_OOT_BYPASS_ANY` the
+  bypass still copies the tonemap the rasterizer tracks ([docs/switches.md](docs/switches.md)).
 
 ### Fixed
 
@@ -69,6 +143,15 @@ Upstream pull request numbers refer to [Lichii](https://github.com/zortos293/Lic
   presents asked for. `trace_status` gains `last_presents`. `trace_replay.py check` runs corpus
   entries the replay must refuse (`expect_failure`), and CI replays the sample trace written
   without its presents (`--gpu-trace-sample <trace> --no-presents`).
+- Benchmark boot suites: a second run on a driver that keeps its own pipeline cache (NVIDIA, AMD)
+  is no longer marked invalid for a driver cache its cold run never saves, and the caches of cold
+  runs that no second run copies are deleted at once instead of filling the work folder; the
+  README says to record the reference with `bench.py run` and to smoke-test with two runs first.
+- Audio: a Switch 2 game opens the host microphone only when it starts capturing, and no
+  game thread waits for that open. On Windows the first start from a new folder (so after every
+  launcher update) asks for microphone access, and Ocarina of Time waited on that prompt before
+  its first frame, though it never captures
+  ([#199](https://github.com/karimalsalah/guarana/issues/199)).
 
 ## [20.4.0] - 2026-11-16
 
