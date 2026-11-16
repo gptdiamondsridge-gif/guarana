@@ -476,6 +476,14 @@ endif()
 
 AddJsonPackage(boost)
 
+# CMake knows no debug information format for clang-cl's assembler, so a global
+# CMAKE_MSVC_DEBUG_INFORMATION_FORMAT (the release builds' Embedded) stops it from generating the
+# build of those sources: keep the format for Boost.Context's C and C++ sources only.
+if (CXX_CLANG_CL AND ARCHITECTURE_arm64 AND TARGET boost_context AND CMAKE_MSVC_DEBUG_INFORMATION_FORMAT)
+    set_property(TARGET boost_context PROPERTY MSVC_DEBUG_INFORMATION_FORMAT
+                 "$<$<COMPILE_LANGUAGE:C,CXX>:${CMAKE_MSVC_DEBUG_INFORMATION_FORMAT}>")
+endif()
+
 # really annoying thing where boost::headers doesn't work with cpm
 # TODO(crueter) investigate
 set(BOOST_NO_HEADERS ${Boost_ADDED})
