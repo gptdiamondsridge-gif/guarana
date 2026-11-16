@@ -169,6 +169,12 @@ class RepositoryTests(unittest.TestCase):
         for needed in ("AGENTS.md", "CONTRIBUTING.md", "LEGAL.md", "docs/switches.md", "tools/ci"):
             self.assertIn(needed, workflow)
 
+    def test_the_pages_workflow_builds_best_settings_before_the_upload(self):
+        workflow = (ROOT / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
+        build = workflow.index("tools/ingest/best_settings.py")
+        self.assertLess(build, workflow.index("actions/upload-pages-artifact"))
+        self.assertIn("tools/ingest", workflow)
+
     def test_the_facts_file_has_no_secret_looking_text(self):
         facts = (ROOT / llms.FACTS).read_text(encoding="utf-8")
         self.assertFalse(re.search(r"(?i)prod\.keys\s*[:=]|api[_-]?key\s*[:=]", facts))

@@ -4,6 +4,8 @@ name: pages
 # Build and deployment > Source: GitHub Actions. Before the upload, tools/ci/build_llms_full.py
 # rebuilds site/llms-full.txt from AGENTS.md, docs/switches.md, CONTRIBUTING.md and LEGAL.md, so a
 # web chat can take that one URL as its whole context; the pushed copy only makes local links work.
+# tools/ingest/best_settings.py derives site/data/best-settings.json from site/data/community.json,
+# which the launcher's Auto mode fetches; nothing else writes that file.
 on:
   push:
     branches: [main]
@@ -15,6 +17,7 @@ on:
       - docs/switches.md
       - tools/ci/build_llms_full.py
       - tools/ci/llms-site-facts.txt
+      - tools/ingest/best_settings.py
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -45,9 +48,13 @@ jobs:
             site
             docs
             tools/ci
+            tools/ingest
 
       - name: Build site/llms-full.txt from the repository
         run: python3 -I tools/ci/build_llms_full.py
+
+      - name: Build site/data/best-settings.json from the community data
+        run: python3 -I tools/ingest/best_settings.py
 
       - name: Configure Pages
         uses: actions/configure-pages@v6
